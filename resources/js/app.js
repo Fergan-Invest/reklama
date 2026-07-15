@@ -44,6 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const initialLng = Number(element.dataset.lng) || 71.7978;
     const hasLocation = Boolean(element.dataset.lat && element.dataset.lng);
     const map = L.map(element).setView([initialLat, initialLng], hasLocation ? 17 : 13);
+    element._leafletMap = map;
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20, attribution: '&copy; OpenStreetMap' }).addTo(map);
     let marker = hasLocation ? L.marker([initialLat, initialLng], { draggable: true }).addTo(map) : null;
     const save = ({ lat, lng }) => { latInput.value = lat.toFixed(7); lngInput.value = lng.toFixed(7); };
@@ -56,6 +57,32 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     marker?.on('dragend', e => save(e.target.getLatLng()));
     map.on('click', e => place(e.latlng));
+
+    document.querySelector('[data-step-target="4"]')?.addEventListener('click', () => {
+        window.setTimeout(() => map.invalidateSize(true), 80);
+    });
+
+    const locateButton = document.getElementById('locate-single-position');
+    const locationStatus = document.getElementById('location-status');
+    locateButton?.addEventListener('click', () => {
+        if (!navigator.geolocation) {
+            if (locationStatus) locationStatus.textContent = 'Браузер геолокацияни қўллаб-қувватламайди.';
+            return;
+        }
+        locateButton.disabled = true;
+        if (locationStatus) locationStatus.textContent = 'Жойлашув аниқланмоқда…';
+        navigator.geolocation.getCurrentPosition(({ coords }) => {
+            const point = L.latLng(coords.latitude, coords.longitude);
+            place(point);
+            map.setView(point, 18);
+            map.invalidateSize(true);
+            locateButton.disabled = false;
+            if (locationStatus) locationStatus.textContent = 'Жойлашув белгиланди.';
+        }, () => {
+            locateButton.disabled = false;
+            if (locationStatus) locationStatus.textContent = 'Жойлашувни аниқлаб бўлмади. Харитани босиб белгиланг.';
+        }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 });
+    });
 });
 
 document.addEventListener('DOMContentLoaded', () => {

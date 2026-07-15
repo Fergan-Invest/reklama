@@ -7,6 +7,7 @@
     <title>@yield('title', 'Реклама объектлари реестри')</title>
     <link rel="stylesheet" href="{{ asset('vendor/leaflet/leaflet.css') }}">
     <link rel="stylesheet" href="{{ asset('css/app.css') }}?v={{ filemtime(public_path('css/app.css')) }}">
+    <script src="{{ asset('vendor/leaflet/leaflet.js') }}" defer></script>
     <script src="{{ asset('js/app.js') }}?v={{ filemtime(public_path('js/app.js')) }}" defer></script>
     @vite('resources/js/app.js')
 </head>
