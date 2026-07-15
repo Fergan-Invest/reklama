@@ -15,10 +15,10 @@
  </div>
  <section class="form-step-panel active" data-step-panel="1"><div class="form-section"><h2>Эгаси</h2><div class="form-grid two">
   <fieldset class="segmented-field"><legend>Эгаси тури</legend><label><input type="radio" name="owner_type" value="yuridik" @checked($ownerType==='yuridik')> Юридик шахс</label><label><input type="radio" name="owner_type" value="jismoniy" @checked($ownerType==='jismoniy')> Жисмоний шахс</label>@error('owner_type')<span>{{ $message }}</span>@enderror</fieldset>
-  <label>Эгасининг номи<input name="owner_name" value="{{ $field('owner_name') }}" required>@error('owner_name')<span>{{ $message }}</span>@enderror</label>
-  <label>СТИР / ЖШШИР<input id="owner_stir_pinfl" name="owner_stir_pinfl" inputmode="numeric" value="{{ $field('owner_stir_pinfl') }}" required>@error('owner_stir_pinfl')<span>{{ $message }}</span>@enderror</label>
+  <label id="owner-name-label">{{ $ownerType==='jismoniy'?'Ф.И.Ш':'Корхона номи' }}<input name="owner_name" value="{{ $field('owner_name') }}" required>@error('owner_name')<span>{{ $message }}</span>@enderror</label>
+  <label><span id="owner-identifier-label">{{ $ownerType==='jismoniy'?'ЖШШИР':'СТИР' }}</span><input id="owner_stir_pinfl" name="owner_stir_pinfl" inputmode="numeric" pattern="\d{{ $ownerType==='jismoniy'?'{14}':'{9}' }}" maxlength="{{ $ownerType==='jismoniy'?14:9 }}" value="{{ $field('owner_stir_pinfl') }}" placeholder="{{ $ownerType==='jismoniy'?'14 хонали ЖШШИР':'9 хонали СТИР' }}" required>@error('owner_stir_pinfl')<span>{{ $message }}</span>@enderror</label>
   <label>Раҳбари<input name="director_name" value="{{ $field('director_name') }}" required>@error('director_name')<span>{{ $message }}</span>@enderror</label>
-  <label>Телефони<input id="phone_number" name="phone_number" value="{{ $field('phone_number') }}" placeholder="+998 (90) 123-45-67" required>@error('phone_number')<span>{{ $message }}</span>@enderror</label>
+  <label>Телефони<input id="phone_number" name="phone_number" type="tel" inputmode="numeric" maxlength="19" value="{{ $field('phone_number') }}" placeholder="+998 (NN) NNN-NN-NN" autocomplete="tel" required>@error('phone_number')<span>{{ $message }}</span>@enderror</label>
   <div class="readonly-field"><span>Яратувчи</span><strong>{{ $editing?$requestItem->creator->name:auth()->user()->name }}</strong></div>
  </div></div></section>
  <section class="form-step-panel" data-step-panel="2"><div class="form-section"><h2>Манзил</h2><div class="form-grid two">

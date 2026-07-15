@@ -662,10 +662,10 @@ function initOwnerType() {
   const sync = () => {
     const type = radios.find((radio) => radio.checked)?.value || "yuridik";
     const isPhysical = type === "jismoniy";
-    identifierLabel.textContent = isPhysical ? "PINFL" : "STIR";
-    identifier.placeholder = isPhysical ? "14 xonali PINFL" : "9 xonali STIR";
+    identifierLabel.textContent = isPhysical ? "ЖШШИР" : "СТИР";
+    identifier.placeholder = isPhysical ? "14 хонали ЖШШИР" : "9 хонали СТИР";
     identifier.maxLength = isPhysical ? 14 : 9;
-    ownerNameLabel.childNodes[0].textContent = isPhysical ? "F.I.SH " : "Korxona nomi ";
+    ownerNameLabel.childNodes[0].textContent = isPhysical ? "Ф.И.Ш " : "Корхона номи ";
   };
 
   radios.forEach((radio) => radio.addEventListener("change", sync));
