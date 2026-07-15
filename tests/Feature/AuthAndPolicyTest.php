@@ -102,11 +102,9 @@ class AuthAndPolicyTest extends TestCase
         $this->actingAs($user)
             ->get(route('requests.index', ['page' => 2]))
             ->assertOk()
-            ->assertSee('16-30')
-            ->assertSee('/ 31 ta yozuv')
-            ->assertSee('Oldingi')
-            ->assertSee('Keyingi')
-            ->assertSee('25 qator');
+            ->assertSee('16–30')
+            ->assertSee('/ 31 та ёзув')
+            ->assertSee('15 қатор');
     }
 
     public function test_invest_create_form_renders(): void
@@ -117,8 +115,8 @@ class AuthAndPolicyTest extends TestCase
         $this->actingAs($user)
             ->get(route('requests.create'))
             ->assertOk()
-            ->assertSee('Yangi ariza')
-            ->assertSee('1. Egasi');
+            ->assertSee('Янги реклама объекти')
+            ->assertSee('1. Эгаси');
     }
 
     public function test_authenticated_user_can_keep_session_alive(): void

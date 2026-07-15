@@ -14,6 +14,12 @@ class RequestImageController extends Controller
         $registryRequest = $image->registryRequest;
         $this->authorize('update', $registryRequest);
 
+        if ($registryRequest->images()->count() <= 1) {
+            return $request->expectsJson()
+                ? response()->json(['message' => 'Реклама объектида битта расм бўлиши шарт.'], 422)
+                : back()->withErrors(['images' => 'Реклама объектида битта расм бўлиши шарт.']);
+        }
+
         $old = $image->toArray();
         Storage::disk('public')->delete($image->path);
         $image->delete();

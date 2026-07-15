@@ -2,6 +2,29 @@ import './bootstrap';
 
 // Advertising-object form: one map point and automatically calculated area.
 document.addEventListener('DOMContentLoaded', () => {
+    const advertisingType = document.getElementById('advertising_type');
+    const advertisingDescription = document.getElementById('advertising-type-description');
+    const syncAdvertisingDescription = () => {
+        if (!advertisingType || !advertisingDescription) return;
+        advertisingDescription.textContent = advertisingType.selectedOptions[0]?.dataset.description || '';
+    };
+    advertisingType?.addEventListener('change', syncAdvertisingDescription);
+    syncAdvertisingDescription();
+
+    const passportRadios = [...document.querySelectorAll('input[name="has_passport"]')];
+    const passportWrap = document.getElementById('passport-details-wrap');
+    const passportDetails = passportWrap?.querySelector('textarea');
+    const syncPassport = () => {
+        const hasPassport = passportRadios.find(radio => radio.checked)?.value === '1';
+        passportWrap?.classList.toggle('hidden', !hasPassport);
+        if (passportDetails) {
+            passportDetails.required = hasPassport;
+            if (!hasPassport) passportDetails.value = '';
+        }
+    };
+    passportRadios.forEach(radio => radio.addEventListener('change', syncPassport));
+    syncPassport();
+
     const length = document.getElementById('area_length');
     const width = document.getElementById('area_width');
     const area = document.getElementById('total_area');

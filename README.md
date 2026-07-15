@@ -1,81 +1,35 @@
 # Reklama obyektlari reestri
 
+Farg‘ona viloyatidagi tashqi reklama obyektlarini ro‘yxatga olish uchun Laravel 10 ilovasi.
+
 Production: https://reklama.fargonainvestkompaniya.uz
+
+## Imkoniyatlar
+
+- Yuridik va jismoniy egalar, STIR/JShShIR hamda telefon validatsiyasi.
+- Tuman, mahalla, ko‘cha turi, ko‘cha va uy raqami bo‘yicha manzil.
+- 4 guruhga ajratilgan 15 turdagi reklama konstruksiyasi.
+- Uzunlik × kenglik asosida avtomatik maydon hisoblash.
+- Bitta xarita lokatsiyasi va bitta majburiy rasm.
+- Ogohlantirish xati va ijaraga olish hujjati.
+- Rollar, tuman bo‘yicha cheklovlar va audit tarixi.
+- Monitoring va Excel eksport.
+
+## Lokal ishga tushirish
+
+```bash
+composer install
+npm install
+cp .env.example .env
+php artisan key:generate
+php artisan migrate --seed
+npm run build
+php artisan serve
+```
 
 ## Serverda yangilash
 
 ```bash
 cd /var/www/tutash-hudud
-./deploy.sh
+sudo ./deploy.sh
 ```
-
-Laravel Blade asosidagi arizalar reestri. Loyiha kadastr arizalarini yaratish, tahrirlash, ko'rish, fayl/rasm yuklash, xaritada poligon belgilash va audit tarixini yuritish uchun ishlatiladi.
-
-## Local tekshiruv
-
-```bash
-composer install
-npm install
-php artisan migrate --seed
-php artisan storage:link
-php artisan test
-npm run build
-```
-
-Windows PowerShell `npm.ps1`ni bloklasa:
-
-```bash
-npm.cmd install
-npm.cmd run build
-```
-
-## Production checklist
-
-Serverdagi `.env` qiymatlarini sozlang:
-
-```env
-APP_ENV=production
-APP_DEBUG=false
-APP_URL=https://your-domain.uz
-LOG_LEVEL=warning
-SESSION_LIFETIME=480
-FILESYSTEM_DISK=local
-```
-
-Deploy tartibi:
-
-```bash
-composer install --no-dev --optimize-autoloader
-npm ci
-npm run build
-php artisan migrate --force
-php artisan storage:link
-php artisan optimize:clear
-php artisan optimize
-```
-
-Muhim: `.env` to'g'ri production qiymatlariga sozlanmaguncha `php artisan optimize` ishlatmang. Aks holda noto'g'ri cached config session/CSRF yoki URL muammolariga olib kelishi mumkin.
-
-## Tekshirilgan oqimlar
-
-- Login va login throttle.
-- Ariza yaratish.
-- Ariza tahrirlash.
-- Ariza o'chirish va media fayllarni diskdan tozalash.
-- 4 ta noyob rasm validatsiyasi.
-- Akt fayli optional.
-- Hokimiyat kadastri optional.
-- Umumiy maydon server tomonda `uzunlik * kenglik` bo'yicha qayta hisoblanadi.
-- Session keep-alive va session tugaganda reload banner.
-- Tuman foydalanuvchisi faqat o'z hududi bilan ishlashi.
-
-## Browser checklist
-
-- Telegram Android WebView.
-- Telegram iOS WebView.
-- Chrome Android va desktop.
-- Safari iOS/macOS.
-- Firefox Android va desktop.
-- Microsoft Edge.
-
-Tekshiriladigan sahifalar: `/login`, `/requests`, `/requests/create`, `/requests/{id}`, `/addresses`, `/users/online`.

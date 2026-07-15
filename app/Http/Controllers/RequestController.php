@@ -33,6 +33,8 @@ class RequestController extends Controller
             'statuses' => RegistryRequest::STATUSES,
             'streetTypes' => RegistryRequest::STREET_TYPES,
             'advertisingTypes' => RegistryRequest::ADVERTISING_TYPES,
+            'advertisingGroups' => RegistryRequest::ADVERTISING_GROUPS,
+            'advertisingDescriptions' => RegistryRequest::ADVERTISING_DESCRIPTIONS,
         ]);
     }
 
@@ -132,9 +134,11 @@ class RequestController extends Controller
     {
         $this->authorize('viewAny', RegistryRequest::class);
 
+        return $this->exportAdvertisingObjects($request);
+
         $requests = $this->filteredRequestsQuery($request)->get();
         $statusLabels = $this->statusLabels();
-        $streetTypes = RegistryRequest::STREET_TYPES;
+        $streetTypes = RegistryRequest::ADVERTISING_TYPES;
         $ownerTypeLabels = ['jismoniy' => 'Jismoniy shaxs', 'yuridik' => 'Yuridik shaxs'];
         $usagePurposeLabels = ['savdo' => 'Savdo', 'xizmat' => 'Xizmat', 'umumiy_ovqatlanish' => 'Umumiy ovqatlanish', 'boshqa' => 'Boshqa'];
         $yesNo = fn ($value) => $value ? 'Ha' : 'Yo‘q';
@@ -228,7 +232,7 @@ class RequestController extends Controller
                 'count' => $items->count(),
                 'total_area' => $items->sum(fn ($item) => (float) $item->total_area),
                 'street_types' => collect($streetTypes)->mapWithKeys(fn ($label, $key) => [
-                    $key => $items->where('street_type', $key)->count(),
+                    $key => $items->where('advertising_type', $key)->count(),
                 ]),
                 'statuses' => collect($statusLabels)->mapWithKeys(fn ($label, $key) => [
                     $key => $items->where('status', $key)->count(),
@@ -286,7 +290,7 @@ class RequestController extends Controller
 
     private function filteredRequestsQuery(Request $request)
     {
-        $query = RegistryRequest::with(['district', 'mahalla', 'street', 'creator', 'files'])
+        $query = RegistryRequest::with(['district', 'mahalla', 'street', 'creator', 'files', 'images'])
             ->latest();
 
         if ($request->user()->isTuman()) {
@@ -294,7 +298,7 @@ class RequestController extends Controller
         }
 
         $query->when($request->filled('status'), fn ($q) => $q->where('status', $request->status));
-        $query->when($request->filled('street_type'), fn ($q) => $q->where('street_type', $request->street_type));
+        $query->when($request->filled('advertising_type'), fn ($q) => $q->where('advertising_type', $request->advertising_type));
         $query->when($request->filled('district_id') && ! $request->user()->isTuman(), fn ($q) => $q->where('district_id', $request->district_id));
         $query->when($request->filled('mahalla_id'), fn ($q) => $q->where('mahalla_id', $request->mahalla_id));
         $query->when($request->filled('date_from'), fn ($q) => $q->whereDate('created_at', '>=', $request->date_from));
@@ -304,7 +308,6 @@ class RequestController extends Controller
             $phoneDigits = preg_replace('/\D/', '', (string) $request->q);
             $q->where(function ($inner) use ($term, $phoneDigits) {
                 $inner->where('request_number', 'like', $term)
-                    ->orWhere('building_cadastr_number', 'like', $term)
                     ->orWhere('owner_stir_pinfl', 'like', $term)
                     ->orWhere('owner_name', 'like', $term)
                     ->orWhere('phone_number', 'like', $term);
@@ -326,6 +329,51 @@ class RequestController extends Controller
         $perPage = (int) $request->input('per_page', 15);
 
         return in_array($perPage, [15, 25, 50, 100], true) ? $perPage : 15;
+    }
+
+    private function exportAdvertisingObjects(Request $request)
+    {
+        $items = $this->filteredRequestsQuery($request)->get();
+        $headings = [
+            'Реестр рақами', 'Ҳолати', 'Сана', 'Эгаси тури', 'Эгаси номи', 'СТИР/ЖШШИР',
+            'Раҳбари', 'Телефони', 'Яратувчи', 'Туман', 'Маҳалла', 'Кўча тури', 'Кўча номи',
+            'Уй рақами', 'Конструкция тури', 'Узунлик (м)', 'Кенглик (м)', 'Майдони (м²)',
+            'Реклама томонлари', 'Паспорт мавжуд', 'Паспорт маълумотлари', 'Шартнома',
+            'Шартнома суммаси', 'Локация кенглиги', 'Локация узунлиги', 'Расм',
+            'Огоҳлантириш хати', 'Ижарага олиш ҳужжати',
+        ];
+        $statusLabels = $this->statusLabels();
+
+        return response()->streamDownload(function () use ($items, $headings, $statusLabels) {
+            echo "\xEF\xBB\xBF<html><head><meta charset=\"UTF-8\"></head><body><table border=\"1\"><tr>";
+            foreach ($headings as $heading) echo $this->excelCell($heading, 'text', 'th');
+            echo '</tr>';
+            foreach ($items as $item) {
+                $values = [
+                    [$item->request_number, 'text'], [$statusLabels[$item->status] ?? $item->status, 'text'],
+                    [$item->created_at?->format('d.m.Y H:i'), 'text'],
+                    [$item->owner_type === 'jismoniy' ? 'Жисмоний шахс' : 'Юридик шахс', 'text'],
+                    [$item->owner_name, 'text'], [$item->owner_stir_pinfl, 'text'], [$item->director_name, 'text'],
+                    [$item->phone_number, 'text'], [$item->creator?->name, 'text'], [$item->district?->name, 'text'],
+                    [$item->mahalla?->name, 'text'], [RegistryRequest::STREET_TYPES[$item->street_type] ?? $item->street_type, 'text'],
+                    [$item->street?->name, 'text'], [$item->house_number, 'text'],
+                    [RegistryRequest::ADVERTISING_TYPES[$item->advertising_type] ?? $item->advertising_type, 'text'],
+                    [$item->area_length, 'number'], [$item->area_width, 'number'], [$item->total_area, 'number'],
+                    [$item->advertising_sides, 'number'], [$item->has_passport ? 'Ҳа' : 'Йўқ', 'text'],
+                    [$item->passport_details, 'text'], [$item->contract_number, 'text'], [$item->contract_amount, 'number'],
+                    [$item->latitude, 'number'], [$item->longitude, 'number'],
+                    [$item->images->isNotEmpty() ? 'Мавжуд' : 'Мавжуд эмас', 'text'],
+                    [$item->files->contains('type', 'warning_letter_file') ? 'Мавжуд' : 'Мавжуд эмас', 'text'],
+                    [$item->files->contains('type', 'lease_document_file') ? 'Мавжуд' : 'Мавжуд эмас', 'text'],
+                ];
+                echo '<tr>';
+                foreach ($values as [$value, $format]) echo $this->excelCell($value, $format);
+                echo '</tr>';
+            }
+            echo '</table></body></html>';
+        }, 'reklama-obyektlari-'.now()->format('Y-m-d-H-i').'.xls', [
+            'Content-Type' => 'application/vnd.ms-excel; charset=UTF-8',
+        ]);
     }
 
     private function availableDistricts(Request $request)
@@ -430,6 +478,8 @@ class RequestController extends Controller
             'streets' => $streets,
             'streetTypes' => RegistryRequest::STREET_TYPES,
             'advertisingTypes' => RegistryRequest::ADVERTISING_TYPES,
+            'advertisingGroups' => RegistryRequest::ADVERTISING_GROUPS,
+            'advertisingDescriptions' => RegistryRequest::ADVERTISING_DESCRIPTIONS,
         ];
     }
 

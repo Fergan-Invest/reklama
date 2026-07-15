@@ -37,7 +37,7 @@ class RegistryRequestFormRequest extends FormRequest
             'total_area' => ['required', 'numeric', 'min:0.01'],
             'advertising_sides' => ['required', 'integer', 'min:1', 'max:8'],
             'has_passport' => ['required', 'boolean'],
-            'passport_details' => ['nullable', 'required_if:has_passport,1', 'string', 'max:2000'],
+            'passport_details' => ['nullable', Rule::requiredIf($this->boolean('has_passport')), 'string', 'max:2000'],
             'contract_number' => ['nullable', 'string', 'max:255'],
             'contract_amount' => ['nullable', 'numeric', 'min:0'],
             'latitude' => ['required', 'numeric', 'between:-90,90'],
@@ -54,6 +54,11 @@ class RegistryRequestFormRequest extends FormRequest
         $validator->after(function ($validator) {
             if ($this->user()?->isTuman() && (int) $this->input('district_id') !== (int) $this->user()->district_id) {
                 $validator->errors()->add('district_id', 'Туман фойдаланувчиси фақат ўз ҳудуди бўйича маълумот киритади.');
+            }
+
+            $item = $this->route('registryRequest');
+            if ($item && ! $this->hasFile('images') && ! $item->images()->exists()) {
+                $validator->errors()->add('images', 'Битта расм юкланиши шарт.');
             }
         });
     }
@@ -73,7 +78,8 @@ class RegistryRequestFormRequest extends FormRequest
     public function attributes(): array
     {
         return [
-            'owner_type' => 'Эгаси тури', 'owner_name' => 'Эгаси номи', 'owner_stir_pinfl' => 'СТИР/ЖШШИР',
+            'owner_type' => 'Эгаси тури', 'owner_name' => 'Эгаси номи',
+            'owner_stir_pinfl' => $this->input('owner_type') === 'jismoniy' ? 'ЖШШИР' : 'СТИР',
             'director_name' => 'Раҳбари', 'phone_number' => 'Телефони', 'district_id' => 'Туман',
             'mahalla_id' => 'Маҳалла', 'street_id' => 'Кўча номи', 'street_type' => 'Кўча тури',
             'house_number' => 'Уй рақами', 'advertising_type' => 'Реклама конструкцияси тури',

@@ -36,7 +36,6 @@ Route::middleware('auth')->group(function () {
     Route::get('/requests/monitoring', [RequestController::class, 'monitoring'])->name('requests.monitoring');
     Route::get('/requests/export', [RequestController::class, 'export'])->name('requests.export');
     Route::resource('requests', RequestController::class)->parameters(['requests' => 'registryRequest']);
-    Route::post('/api/check-cadastre-restriction', [RequestController::class, 'checkCadastreRestriction'])->name('cadastre.check');
     Route::delete('/request-files/{file}', [RequestFileController::class, 'destroy'])->name('request-files.destroy');
     Route::delete('/request-images/{image}', [RequestImageController::class, 'destroy'])->name('request-images.destroy');
     Route::get('/addresses', [AddressController::class, 'index'])->name('addresses.index');
