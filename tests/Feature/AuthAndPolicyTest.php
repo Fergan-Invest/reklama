@@ -1,0 +1,369 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\District;
+use App\Models\Mahalla;
+use App\Models\RegistryRequest;
+use App\Models\Street;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Hash;
+use Tests\TestCase;
+
+class AuthAndPolicyTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_login_works_with_seeded_style_user(): void
+    {
+        User::create([
+            'name' => 'Invest',
+            'email' => 'invest@tutash.local',
+            'password' => Hash::make('Password123!'),
+            'role' => 'invest',
+        ]);
+
+        $this->post('/login', [
+            'email' => 'invest@tutash.local',
+            'password' => 'Password123!',
+        ])->assertRedirect('/requests');
+
+        $this->assertAuthenticated();
+    }
+
+    public function test_tuman_user_only_sees_own_district_request(): void
+    {
+        [$districtA, $districtB] = [District::create(['external_id' => 1, 'name' => 'A']), District::create(['external_id' => 2, 'name' => 'B'])];
+        $user = User::create(['name' => 'A operator', 'email' => 'a@example.com', 'password' => 'secret', 'role' => 'tuman', 'district_id' => $districtA->id]);
+        $requestA = $this->registryRequest($districtA, $user);
+        $requestB = $this->registryRequest($districtB, $user);
+
+        $this->actingAs($user)->get(route('requests.show', $requestA))->assertOk();
+        $this->actingAs($user)->get(route('requests.show', $requestB))->assertForbidden();
+    }
+
+    public function test_tuman_monitoring_only_shows_own_district(): void
+    {
+        [$districtA, $districtB] = [
+            District::create(['external_id' => 1, 'name' => 'Alpha tuman']),
+            District::create(['external_id' => 2, 'name' => 'Beta tuman']),
+        ];
+        $user = User::create(['name' => 'Alpha operator', 'email' => 'monitoring-a@example.com', 'password' => 'secret', 'role' => 'tuman', 'district_id' => $districtA->id]);
+        $invest = User::create(['name' => 'Invest', 'email' => 'monitoring-invest@example.com', 'password' => 'secret', 'role' => 'invest']);
+
+        $this->registryRequest($districtA, $user)->update(['total_area' => 125.5]);
+        $this->registryRequest($districtB, $invest)->update(['owner_name' => 'Beta Owner', 'total_area' => 999]);
+
+        $this->actingAs($user)
+            ->get(route('requests.monitoring', ['district_id' => $districtB->id]))
+            ->assertOk()
+            ->assertSee('Alpha tuman')
+            ->assertSee('125.50')
+            ->assertDontSee('Beta tuman')
+            ->assertDontSee('999.00');
+    }
+
+    public function test_viloyat_hokimi_cannot_create(): void
+    {
+        $user = User::create(['name' => 'Hokim', 'email' => 'h@example.com', 'password' => 'secret', 'role' => 'viloyat_hokimi']);
+
+        $this->actingAs($user)->get(route('requests.create'))->assertForbidden();
+    }
+
+    public function test_tuman_user_cannot_edit_even_own_district_request(): void
+    {
+        $district = District::create(['external_id' => 1, 'name' => 'A']);
+        $user = User::create(['name' => 'A operator', 'email' => 'edit-a@example.com', 'password' => 'secret', 'role' => 'tuman', 'district_id' => $district->id]);
+        $request = $this->registryRequest($district, $user);
+
+        $this->actingAs($user)
+            ->get(route('requests.show', $request))
+            ->assertOk()
+            ->assertDontSee('Tahrirlash');
+
+        $this->actingAs($user)
+            ->get(route('requests.edit', $request))
+            ->assertForbidden();
+    }
+
+    public function test_requests_index_shows_pagination_controls_after_first_page(): void
+    {
+        $district = District::create(['external_id' => 1, 'name' => 'A']);
+        $user = User::create(['name' => 'Invest', 'email' => 'pagination@example.com', 'password' => 'secret', 'role' => 'invest']);
+
+        foreach (range(1, 31) as $index) {
+            $this->registryRequest($district, $user)->update([
+                'owner_name' => "Owner {$index}",
+                'building_cadastr_number' => sprintf('31:23:12:31:23:%04d/12:01', $index),
+            ]);
+        }
+
+        $this->actingAs($user)
+            ->get(route('requests.index', ['page' => 2]))
+            ->assertOk()
+            ->assertSee('16-30')
+            ->assertSee('/ 31 ta yozuv')
+            ->assertSee('Oldingi')
+            ->assertSee('Keyingi')
+            ->assertSee('25 qator');
+    }
+
+    public function test_invest_create_form_renders(): void
+    {
+        District::create(['external_id' => 1, 'name' => 'Farg‘ona shahar']);
+        $user = User::create(['name' => 'Invest', 'email' => 'invest-form@example.com', 'password' => 'secret', 'role' => 'invest']);
+
+        $this->actingAs($user)
+            ->get(route('requests.create'))
+            ->assertOk()
+            ->assertSee('Yangi ariza')
+            ->assertSee('1. Egasi');
+    }
+
+    public function test_authenticated_user_can_keep_session_alive(): void
+    {
+        $user = User::create(['name' => 'Invest', 'email' => 'keepalive@example.com', 'password' => 'secret', 'role' => 'invest']);
+
+        $this->actingAs($user)
+            ->getJson(route('session.keep-alive'))
+            ->assertOk()
+            ->assertJson([
+                'ok' => true,
+                'session_lifetime' => (int) config('session.lifetime'),
+            ])
+            ->assertJsonStructure(['csrf_token', 'server_time']);
+
+        auth()->logout();
+
+        $this->getJson(route('session.keep-alive'))->assertUnauthorized();
+    }
+
+    public function test_session_clear_invalidates_session_and_redirects_to_login(): void
+    {
+        $user = User::create(['name' => 'Invest', 'email' => 'clear-session@example.com', 'password' => 'secret', 'role' => 'invest']);
+
+        $this->actingAs($user)
+            ->get(route('session.clear'))
+            ->assertRedirect(route('login'));
+
+        $this->assertGuest();
+    }
+
+    public function test_addresses_page_renders_counts(): void
+    {
+        $district = District::create(['external_id' => 1, 'name' => 'Farg‘ona shahar']);
+        Mahalla::create(['district_id' => $district->id, 'name' => 'Oybek']);
+        $user = User::create(['name' => 'Invest', 'email' => 'address@example.com', 'password' => 'secret', 'role' => 'invest']);
+
+        $this->actingAs($user)
+            ->get(route('addresses.index'))
+            ->assertOk()
+            ->assertSee('Farg‘ona shahar')
+            ->assertSee('1 MFY')
+            ->assertDontSee('MFYlar ro‘yxati');
+
+        $this->actingAs($user)
+            ->get(route('addresses.show', $district))
+            ->assertOk()
+            ->assertSee('MFYlar ro‘yxati')
+            ->assertSee('Oybek');
+    }
+
+    public function test_address_district_page_shows_and_navigates_mahalla_pagination(): void
+    {
+        $district = District::create(['external_id' => 1, 'name' => 'Fargona shahar']);
+        foreach (range(1, 51) as $number) {
+            Mahalla::create([
+                'district_id' => $district->id,
+                'name' => sprintf('MFY %02d', $number),
+            ]);
+        }
+        $user = User::create(['name' => 'Invest', 'email' => 'address-pagination@example.com', 'password' => 'secret', 'role' => 'invest']);
+
+        $this->actingAs($user)
+            ->get(route('addresses.show', $district))
+            ->assertOk()
+            ->assertSee('1-50')
+            ->assertSee('/ 51 ta MFY')
+            ->assertSee('pagination-links', false)
+            ->assertSee('Keyingi')
+            ->assertDontSee('MFY 51');
+
+        $this->actingAs($user)
+            ->get(route('addresses.show', ['district' => $district, 'page' => 2]))
+            ->assertOk()
+            ->assertSee('51-51')
+            ->assertSee('MFY 51');
+    }
+
+    public function test_only_invest_can_open_address_management(): void
+    {
+        $district = District::create(['external_id' => 1, 'name' => 'Farg‘ona shahar']);
+        $tuman = User::create([
+            'name' => 'Tuman operatori',
+            'email' => 'district-address@example.com',
+            'password' => 'secret',
+            'role' => 'tuman',
+            'district_id' => $district->id,
+        ]);
+        $hokim = User::create([
+            'name' => 'Hokim',
+            'email' => 'hokim-address@example.com',
+            'password' => 'secret',
+            'role' => 'viloyat_hokimi',
+        ]);
+
+        $this->actingAs($tuman)->get(route('addresses.index'))->assertForbidden();
+        $this->actingAs($hokim)->get(route('addresses.show', $district))->assertForbidden();
+        $this->actingAs($tuman)
+            ->post(route('mahallas.store'), ['district_id' => $district->id, 'name' => 'Ruxsatsiz MFY'])
+            ->assertForbidden();
+    }
+
+    public function test_invest_can_create_and_update_mahalla_and_street(): void
+    {
+        $district = District::create(['external_id' => 1, 'name' => 'Farg‘ona shahar']);
+        $invest = User::create([
+            'name' => 'Invest',
+            'email' => 'address-manager@example.com',
+            'password' => 'secret',
+            'role' => 'invest',
+        ]);
+
+        $this->actingAs($invest)
+            ->post(route('mahallas.store'), [
+                'district_id' => $district->id,
+                'name' => 'Yangi MFY',
+            ])
+            ->assertRedirect();
+
+        $mahalla = Mahalla::where('name', 'Yangi MFY')->firstOrFail();
+
+        $this->actingAs($invest)
+            ->put(route('mahallas.update', $mahalla), ['name' => 'Yangilangan MFY'])
+            ->assertRedirect();
+
+        $this->actingAs($invest)
+            ->post(route('streets.store'), [
+                'district_id' => $district->id,
+                'mahalla_id' => $mahalla->id,
+                'name' => 'Navoiy',
+                'type' => 'kocha',
+            ])
+            ->assertRedirect();
+
+        $street = Street::where('name', 'Navoiy')->firstOrFail();
+
+        $this->actingAs($invest)
+            ->put(route('streets.update', $street), [
+                'mahalla_id' => $mahalla->id,
+                'name' => 'Mustaqillik',
+                'type' => 'kocha',
+            ])
+            ->assertRedirect();
+
+        $this->assertDatabaseHas('mahallas', ['id' => $mahalla->id, 'name' => 'Yangilangan MFY']);
+        $this->assertDatabaseHas('streets', ['id' => $street->id, 'name' => 'Mustaqillik']);
+        $this->assertDatabaseHas('audit_logs', ['event' => 'mahalla_created']);
+        $this->assertDatabaseHas('audit_logs', ['event' => 'street_updated']);
+    }
+
+    public function test_tuman_can_add_street_to_own_district_from_request_form(): void
+    {
+        $district = District::create(['external_id' => 1, 'name' => 'Farg‘ona tumani']);
+        $mahalla = Mahalla::create(['district_id' => $district->id, 'name' => 'Oybek']);
+        $tuman = User::create([
+            'name' => 'Tuman operatori',
+            'email' => 'street-tuman@example.com',
+            'password' => 'secret',
+            'role' => 'tuman',
+            'district_id' => $district->id,
+        ]);
+
+        $this->actingAs($tuman)
+            ->get(route('requests.create'))
+            ->assertOk()
+            ->assertSee('id="add-street"', false);
+
+        $this->actingAs($tuman)
+            ->postJson(route('streets.store'), [
+                'district_id' => $district->id,
+                'mahalla_id' => $mahalla->id,
+                'name' => 'Mustaqillik',
+                'type' => 'kocha',
+            ])
+            ->assertOk()
+            ->assertJsonFragment(['name' => 'Mustaqillik']);
+
+        $this->assertDatabaseHas('streets', [
+            'district_id' => $district->id,
+            'mahalla_id' => $mahalla->id,
+            'name' => 'Mustaqillik',
+        ]);
+    }
+
+    public function test_tuman_cannot_add_street_to_another_district(): void
+    {
+        $ownDistrict = District::create(['external_id' => 1, 'name' => 'Own']);
+        $otherDistrict = District::create(['external_id' => 2, 'name' => 'Other']);
+        $otherMahalla = Mahalla::create(['district_id' => $otherDistrict->id, 'name' => 'Other MFY']);
+        $tuman = User::create([
+            'name' => 'Tuman operatori',
+            'email' => 'street-scope@example.com',
+            'password' => 'secret',
+            'role' => 'tuman',
+            'district_id' => $ownDistrict->id,
+        ]);
+
+        $this->actingAs($tuman)
+            ->postJson(route('streets.store'), [
+                'district_id' => $otherDistrict->id,
+                'mahalla_id' => $otherMahalla->id,
+                'name' => 'Ruxsatsiz',
+                'type' => 'kocha',
+            ])
+            ->assertForbidden();
+
+        $this->assertDatabaseMissing('streets', ['name' => 'Ruxsatsiz']);
+    }
+
+    private function registryRequest(District $district, User $user): RegistryRequest
+    {
+        $mahalla = Mahalla::firstOrCreate(['district_id' => $district->id, 'name' => 'Markaz']);
+        $street = Street::firstOrCreate(['district_id' => $district->id, 'mahalla_id' => $mahalla->id, 'name' => 'Navoiy'], ['type' => 'kocha']);
+
+        return RegistryRequest::create([
+            'request_number' => uniqid('THR-'),
+            'status' => 'submitted',
+            'created_by' => $user->id,
+            'building_cadastr_number' => '31:23:12:31:23:1231/12:01',
+            'hokimyatga_biriktirilgan_kadastr_raqami' => '10:08:04:01:02:5006/0001:035',
+            'owner_type' => 'yuridik',
+            'owner_stir_pinfl' => '123456789',
+            'owner_name' => 'Owner',
+            'district_id' => $district->id,
+            'mahalla_id' => $mahalla->id,
+            'street_id' => $street->id,
+            'house_number' => '1',
+            'street_type' => 'kocha',
+            'director_name' => 'Director',
+            'area_length' => 10,
+            'area_width' => 10,
+            'calculated_land_area' => 100,
+            'total_area' => 100,
+            'distance_to_roadway' => 1,
+            'distance_to_sidewalk' => 1,
+            'usage_purpose' => 'savdo',
+            'activity_type' => 'Savdo',
+            'terrace_buildings_available' => false,
+            'terrace_buildings_permanent' => false,
+            'has_permit' => true,
+            'adjacent_activity_land' => 100,
+            'adjacent_facilities' => ['soyabon'],
+            'latitude' => 40.1,
+            'longitude' => 71.1,
+            'polygon_coordinates' => ['type' => 'Feature', 'geometry' => ['type' => 'Polygon', 'coordinates' => [[[71, 40], [71.1, 40], [71.1, 40.1], [71, 40]]]]],
+        ]);
+    }
+}

@@ -1,0 +1,506 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Http\Requests\RegistryRequestFormRequest;
+use App\Models\District;
+use App\Models\Mahalla;
+use App\Models\RegistryRequest;
+use App\Models\RequestFile;
+use App\Models\RequestImage;
+use App\Models\Street;
+use App\Services\AuditLogger;
+use App\Services\RequestNumberGenerator;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+
+class RequestController extends Controller
+{
+    public function index(Request $request)
+    {
+        $this->authorize('viewAny', RegistryRequest::class);
+
+        $query = $this->filteredRequestsQuery($request);
+        $perPage = $this->requestsPerPage($request);
+
+        return view('requests.index', [
+            'requests' => $query->paginate($perPage)->withQueryString(),
+            'perPage' => $perPage,
+            'perPageOptions' => [15, 25, 50, 100],
+            'districts' => $this->availableDistricts($request),
+            'mahallas' => $this->availableMahallas($request),
+            'statuses' => RegistryRequest::STATUSES,
+            'streetTypes' => RegistryRequest::STREET_TYPES,
+            'advertisingTypes' => RegistryRequest::ADVERTISING_TYPES,
+        ]);
+    }
+
+    public function create(Request $request)
+    {
+        $this->authorize('create', RegistryRequest::class);
+
+        return view('requests.form', $this->formData($request));
+    }
+
+    public function store(RegistryRequestFormRequest $request, AuditLogger $auditLogger, RequestNumberGenerator $requestNumberGenerator)
+    {
+        $registryRequest = DB::transaction(function () use ($request, $auditLogger, $requestNumberGenerator) {
+            $data = $this->validatedPayload($request);
+            $data['request_number'] = $requestNumberGenerator->next();
+            $data['status'] = 'submitted';
+            $data['created_by'] = $request->user()->id;
+            $data['updated_by'] = $request->user()->id;
+
+            $registryRequest = RegistryRequest::create($data);
+            $this->storeMedia($request, $registryRequest);
+            $auditLogger->log($registryRequest, 'created', [], $registryRequest->fresh()->toArray(), $request);
+
+            return $registryRequest;
+        });
+
+        return redirect()->route('requests.show', $registryRequest)->with('success', 'Ariza saqlandi.');
+    }
+
+    public function validateForm(RegistryRequestFormRequest $request, ?RegistryRequest $registryRequest = null)
+    {
+        return response()->json([
+            'ok' => true,
+            'message' => 'Maʼlumotlar to‘g‘ri.',
+        ]);
+    }
+
+    public function show(RegistryRequest $registryRequest)
+    {
+        $this->authorize('view', $registryRequest);
+
+        return view('requests.show', [
+            'requestItem' => $registryRequest->load(['district', 'mahalla', 'street', 'creator', 'images', 'files', 'audits.user']),
+        ]);
+    }
+
+    public function edit(Request $request, RegistryRequest $registryRequest)
+    {
+        $this->authorize('update', $registryRequest);
+
+        return view('requests.form', $this->formData($request, $registryRequest));
+    }
+
+    public function keepAlive(Request $request)
+    {
+        $request->session()->put('last_keep_alive_at', now()->timestamp);
+
+        return response()->json([
+            'ok' => true,
+            'csrf_token' => csrf_token(),
+            'session_lifetime' => (int) config('session.lifetime'),
+            'server_time' => now()->toIso8601String(),
+        ])->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    }
+
+    public function update(RegistryRequestFormRequest $request, RegistryRequest $registryRequest, AuditLogger $auditLogger)
+    {
+        $this->authorize('update', $registryRequest);
+
+        DB::transaction(function () use ($request, $registryRequest, $auditLogger) {
+            $old = $registryRequest->getOriginal();
+            $data = $this->validatedPayload($request);
+            $data['updated_by'] = $request->user()->id;
+
+            $registryRequest->update($data);
+            $this->storeMedia($request, $registryRequest);
+            $auditLogger->log($registryRequest, 'updated', $old, $registryRequest->fresh()->toArray(), $request);
+        });
+
+        return redirect()->route('requests.show', $registryRequest)->with('success', 'Ariza yangilandi.');
+    }
+
+    public function destroy(Request $request, RegistryRequest $registryRequest, AuditLogger $auditLogger)
+    {
+        $this->authorize('delete', $registryRequest);
+
+        DB::transaction(function () use ($request, $registryRequest, $auditLogger) {
+            $old = $registryRequest->toArray();
+            $auditLogger->log($registryRequest, 'deleted', $old, [], $request);
+            $registryRequest->delete();
+        });
+
+        return redirect()->route('requests.index')->with('success', 'Ariza o‘chirildi.');
+    }
+
+    public function export(Request $request)
+    {
+        $this->authorize('viewAny', RegistryRequest::class);
+
+        $requests = $this->filteredRequestsQuery($request)->get();
+        $statusLabels = $this->statusLabels();
+        $streetTypes = RegistryRequest::STREET_TYPES;
+        $ownerTypeLabels = ['jismoniy' => 'Jismoniy shaxs', 'yuridik' => 'Yuridik shaxs'];
+        $usagePurposeLabels = ['savdo' => 'Savdo', 'xizmat' => 'Xizmat', 'umumiy_ovqatlanish' => 'Umumiy ovqatlanish', 'boshqa' => 'Boshqa'];
+        $yesNo = fn ($value) => $value ? 'Ha' : 'Yo‘q';
+        $filename = 'tutash-hududlar-'.now()->format('Y-m-d-H-i').'.xls';
+
+        return response()->streamDownload(function () use ($requests, $statusLabels, $streetTypes, $ownerTypeLabels, $usagePurposeLabels, $yesNo) {
+            echo "\xEF\xBB\xBF";
+            echo '<html><head><meta charset="UTF-8"></head><body><table border="1"><tr>';
+
+            foreach ($this->exportHeadings() as $heading) {
+                echo $this->excelCell($heading, 'text', 'th');
+            }
+
+            echo '</tr>';
+
+            foreach ($requests as $item) {
+                $row = [
+                    ['value' => $item->request_number, 'format' => 'text'],
+                    ['value' => $statusLabels[$item->status] ?? $item->status, 'format' => 'text'],
+                    ['value' => $item->created_at?->format('d.m.Y H:i'), 'format' => 'text'],
+                    ['value' => $item->district?->name, 'format' => 'text'],
+                    ['value' => $item->mahalla?->name, 'format' => 'text'],
+                    ['value' => $item->street?->name, 'format' => 'text'],
+                    ['value' => $item->house_number, 'format' => 'text'],
+                    ['value' => $streetTypes[$item->street_type] ?? $item->street_type, 'format' => 'text'],
+                    ['value' => $item->building_cadastr_number, 'format' => 'text'],
+                    ['value' => $item->hokimyatga_biriktirilgan_kadastr_raqami, 'format' => 'text'],
+                    ['value' => $ownerTypeLabels[$item->owner_type] ?? $item->owner_type, 'format' => 'text'],
+                    ['value' => $item->owner_stir_pinfl, 'format' => 'text'],
+                    ['value' => $item->owner_name, 'format' => 'text'],
+                    ['value' => $item->director_name, 'format' => 'text'],
+                    ['value' => $item->phone_number, 'format' => 'text'],
+                    ['value' => $item->area_length, 'format' => 'number'],
+                    ['value' => $item->area_width, 'format' => 'number'],
+                    ['value' => $item->total_area, 'format' => 'number'],
+                    ['value' => $item->building_facade_length, 'format' => 'number'],
+                    ['value' => $item->summer_terrace_sides, 'format' => 'number'],
+                    ['value' => $item->distance_to_roadway, 'format' => 'number'],
+                    ['value' => $item->distance_to_sidewalk, 'format' => 'number'],
+                    ['value' => $usagePurposeLabels[$item->usage_purpose] ?? $item->usage_purpose, 'format' => 'text'],
+                    ['value' => $item->activity_type, 'format' => 'text'],
+                    ['value' => $yesNo($item->terrace_buildings_available), 'format' => 'text'],
+                    ['value' => $yesNo($item->terrace_buildings_permanent), 'format' => 'text'],
+                    ['value' => $yesNo($item->has_permit), 'format' => 'text'],
+                    ['value' => $yesNo($item->has_tenant), 'format' => 'text'],
+                    ['value' => $item->tenant_stir_pinfl, 'format' => 'text'],
+                    ['value' => $item->tenant_name, 'format' => 'text'],
+                    ['value' => $item->tenant_activity_type, 'format' => 'text'],
+                    ['value' => $item->adjacent_activity_type, 'format' => 'text'],
+                    ['value' => $item->adjacent_activity_land, 'format' => 'number'],
+                    ['value' => collect($item->adjacent_facilities ?? [])->implode(', '), 'format' => 'text'],
+                    ['value' => $item->additional_info, 'format' => 'text'],
+                    ['value' => $item->latitude, 'format' => 'number'],
+                    ['value' => $item->longitude, 'format' => 'number'],
+                    ['value' => $item->files->contains('type', 'act_file') ? 'Mavjud' : 'Mavjud emas', 'format' => 'text'],
+                    ['value' => $item->files->contains('type', 'design_code_file') ? 'Mavjud' : 'Mavjud emas', 'format' => 'text'],
+                    ['value' => $item->files->contains('type', 'qayta_organish_akti_file') ? 'Mavjud' : 'Mavjud emas', 'format' => 'text'],
+                    ['value' => $item->creator?->name, 'format' => 'text'],
+                ];
+
+                echo '<tr>';
+                foreach ($row as $cell) {
+                    echo $this->excelCell($cell['value'], $cell['format']);
+                }
+                echo '</tr>';
+            }
+
+            echo '</table></body></html>';
+        }, $filename, [
+            'Content-Type' => 'application/vnd.ms-excel; charset=UTF-8',
+        ]);
+    }
+
+    public function monitoring(Request $request)
+    {
+        $this->authorize('viewAny', RegistryRequest::class);
+
+        $requests = $this->filteredRequestsQuery($request)->get();
+        $districts = $this->availableDistricts($request);
+        $groupedByDistrict = $requests->groupBy('district_id');
+        $statusLabels = $this->statusLabels();
+        $streetTypes = RegistryRequest::STREET_TYPES;
+
+        $rows = $districts->map(function (District $district) use ($groupedByDistrict, $request, $statusLabels, $streetTypes) {
+            $items = $groupedByDistrict->get($district->id, collect());
+            $query = $request->query();
+            $query['district_id'] = $district->id;
+
+            return [
+                'district' => $district,
+                'count' => $items->count(),
+                'total_area' => $items->sum(fn ($item) => (float) $item->total_area),
+                'street_types' => collect($streetTypes)->mapWithKeys(fn ($label, $key) => [
+                    $key => $items->where('street_type', $key)->count(),
+                ]),
+                'statuses' => collect($statusLabels)->mapWithKeys(fn ($label, $key) => [
+                    $key => $items->where('status', $key)->count(),
+                ]),
+                'url' => route('requests.index', $query),
+            ];
+        });
+
+        return view('requests.monitoring', [
+            'rows' => $rows,
+            'totals' => [
+                'count' => $requests->count(),
+                'total_area' => $requests->sum(fn ($item) => (float) $item->total_area),
+                'districts' => $rows->where('count', '>', 0)->count(),
+            ],
+            'districts' => $districts,
+            'mahallas' => $this->availableMahallas($request),
+            'statuses' => RegistryRequest::STATUSES,
+            'statusLabels' => $statusLabels,
+            'streetTypes' => $streetTypes,
+        ]);
+    }
+
+    public function checkCadastreRestriction(Request $request)
+    {
+        $data = $request->validate([
+            'cadastre_number' => ['required', 'string', 'max:100', 'regex:/^\d{2}:\d{2}:\d{2}:\d{2}:\d{2}:\d{4}([\/:].+)?$/'],
+            'registry_request_id' => ['nullable', 'integer', 'exists:registry_requests,id'],
+        ]);
+
+        $existing = RegistryRequest::query()
+            ->where('building_cadastr_number', $data['cadastre_number'])
+            ->when($data['registry_request_id'] ?? null, fn ($query, $id) => $query->whereKeyNot($id))
+            ->latest()
+            ->first();
+
+        return response()->json([
+            'restricted' => filled($existing),
+            'message' => filled($existing)
+                ? "Bu kadastr raqami {$existing->request_number} arizasida ishlatilgan. Holati: ".$this->statusLabels()[$existing->status].'.'
+                : 'Kadastr raqami bo‘yicha cheklov topilmadi.',
+        ]);
+    }
+
+    private function statusLabels(): array
+    {
+        return [
+            'draft' => 'Qoralama',
+            'submitted' => 'Yuborilgan',
+            'in_review' => 'Ko‘rib chiqilmoqda',
+            'approved' => 'Tasdiqlangan',
+            'rejected' => 'Rad etilgan',
+        ];
+    }
+
+    private function filteredRequestsQuery(Request $request)
+    {
+        $query = RegistryRequest::with(['district', 'mahalla', 'street', 'creator', 'files'])
+            ->latest();
+
+        if ($request->user()->isTuman()) {
+            $query->where('district_id', $request->user()->district_id);
+        }
+
+        $query->when($request->filled('status'), fn ($q) => $q->where('status', $request->status));
+        $query->when($request->filled('street_type'), fn ($q) => $q->where('street_type', $request->street_type));
+        $query->when($request->filled('district_id') && ! $request->user()->isTuman(), fn ($q) => $q->where('district_id', $request->district_id));
+        $query->when($request->filled('mahalla_id'), fn ($q) => $q->where('mahalla_id', $request->mahalla_id));
+        $query->when($request->filled('date_from'), fn ($q) => $q->whereDate('created_at', '>=', $request->date_from));
+        $query->when($request->filled('date_to'), fn ($q) => $q->whereDate('created_at', '<=', $request->date_to));
+        $query->when($request->filled('q'), function ($q) use ($request) {
+            $term = '%'.$request->q.'%';
+            $phoneDigits = preg_replace('/\D/', '', (string) $request->q);
+            $q->where(function ($inner) use ($term, $phoneDigits) {
+                $inner->where('request_number', 'like', $term)
+                    ->orWhere('building_cadastr_number', 'like', $term)
+                    ->orWhere('owner_stir_pinfl', 'like', $term)
+                    ->orWhere('owner_name', 'like', $term)
+                    ->orWhere('phone_number', 'like', $term);
+
+                if ($phoneDigits !== '') {
+                    $inner->orWhereRaw(
+                        "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone_number, '+', ''), ' ', ''), '(', ''), ')', ''), '-', '') LIKE ?",
+                        ['%'.$phoneDigits.'%']
+                    );
+                }
+            });
+        });
+
+        return $query;
+    }
+
+    private function requestsPerPage(Request $request): int
+    {
+        $perPage = (int) $request->input('per_page', 15);
+
+        return in_array($perPage, [15, 25, 50, 100], true) ? $perPage : 15;
+    }
+
+    private function availableDistricts(Request $request)
+    {
+        $query = District::orderBy('name');
+
+        if ($request->user()->isTuman()) {
+            $query->where('id', $request->user()->district_id);
+        }
+
+        return $query->get();
+    }
+
+    private function availableMahallas(Request $request)
+    {
+        $query = Mahalla::orderBy('name');
+
+        if ($request->user()->isTuman()) {
+            $query->where('district_id', $request->user()->district_id);
+        } elseif ($request->filled('district_id')) {
+            $query->where('district_id', $request->district_id);
+        }
+
+        return $query->get();
+    }
+
+    private function exportHeadings(): array
+    {
+        return [
+            'Ariza raqami',
+            'Holati',
+            'Sana',
+            'Tuman',
+            'Mahalla',
+            'Ko‘cha',
+            'Uy raqami',
+            'Ko‘cha turi',
+            'Kadastr raqami',
+            'Hokimiyat kadastri',
+            'Mulk egasi turi',
+            'STIR/PINFL',
+            'Egasi nomi',
+            'Rahbar F.I.SH',
+            'Telefon',
+            'Uzunlik',
+            'Kenglik',
+            'Umumiy maydon',
+            'Fasad uzunligi',
+            'Yozgi terassa tomonlari',
+            'Yo‘lgacha masofa',
+            'Trotuargacha masofa',
+            'Foydalanish maqsadi',
+            'Faoliyat turi',
+            'Terassada qurilmalar bor',
+            'Doimiy qurilmalar bor',
+            'Ruxsatnoma bor',
+            'Ijarachi mavjud',
+            'Ijarachi STIR/PINFL',
+            'Ijarachi nomi',
+            'Ijarachi faoliyat turi',
+            'Tutash hududdagi faoliyat',
+            'Tutash hudud maydoni',
+            'Tutash hudud obyektlari',
+            'Qo‘shimcha ma’lumot',
+            'Xarita kengligi',
+            'Xarita uzunligi',
+            'Akt fayli',
+            'Loyiha kodi fayli',
+            'Qayta o‘rganish akti',
+            'Yaratuvchi',
+        ];
+    }
+
+    private function excelCell($value, string $format = 'text', string $tag = 'td'): string
+    {
+        if ($format === 'number' && $value !== null && $value !== '') {
+            $value = number_format((float) $value, 2, '.', '');
+            $style = 'mso-number-format:"0.00";';
+        } else {
+            $style = 'mso-number-format:"\@";';
+        }
+
+        return '<'.$tag." style='".$style."'>".e((string) ($value ?? '')).'</'.$tag.'>';
+    }
+
+    private function formData(Request $request, ?RegistryRequest $registryRequest = null): array
+    {
+        $districts = $this->availableDistricts($request);
+        $mahallas = Mahalla::orderBy('name')->get();
+        $streets = Street::orderBy('name')->get();
+
+        if ($request->user()->isTuman()) {
+            $districts = $districts->where('id', $request->user()->district_id)->values();
+            $mahallas = $mahallas->where('district_id', $request->user()->district_id)->values();
+            $streets = $streets->where('district_id', $request->user()->district_id)->values();
+        }
+
+        return [
+            'requestItem' => $registryRequest,
+            'districts' => $districts,
+            'mahallas' => $mahallas,
+            'streets' => $streets,
+            'streetTypes' => RegistryRequest::STREET_TYPES,
+            'advertisingTypes' => RegistryRequest::ADVERTISING_TYPES,
+        ];
+    }
+
+    private function validatedPayload(RegistryRequestFormRequest $request): array
+    {
+        $data = $request->safe()->except(['images', 'warning_letter_file', 'lease_document_file']);
+        $existing = $request->route('registryRequest');
+
+        // Legacy columns remain populated so existing data, reports and audits stay compatible.
+        $data += [
+            'building_cadastr_number' => $existing?->building_cadastr_number ?? 'REKLAMA-'.now()->format('YmdHisv'),
+            'hokimyatga_biriktirilgan_kadastr_raqami' => $existing?->hokimyatga_biriktirilgan_kadastr_raqami,
+            'calculated_land_area' => $data['total_area'], 'total_area_manual' => false,
+            'building_facade_length' => null, 'summer_terrace_sides' => null,
+            'distance_to_roadway' => 0, 'distance_to_sidewalk' => 0,
+            'usage_purpose' => 'boshqa', 'activity_type' => 'reklama',
+            'terrace_buildings_available' => false, 'terrace_buildings_permanent' => false,
+            'has_permit' => false, 'has_tenant' => false, 'adjacent_activity_land' => 0,
+            'adjacent_facilities' => [],
+            'polygon_coordinates' => ['type' => 'Point', 'coordinates' => [(float) $data['longitude'], (float) $data['latitude']]],
+        ];
+
+        return $data;
+    }
+
+    private function storeMedia(RegistryRequestFormRequest $request, RegistryRequest $registryRequest): void
+    {
+        if ($request->hasFile('images')) {
+            $registryRequest->images()->get()->each(function (RequestImage $image) {
+                Storage::disk('public')->delete($image->path);
+                $image->delete();
+            });
+        }
+        foreach ($request->file('images', []) as $image) {
+            $path = $image->store("requests/{$registryRequest->id}/images", 'public');
+            RequestImage::create([
+                'registry_request_id' => $registryRequest->id,
+                'uploaded_by' => $request->user()->id,
+                'path' => $path,
+                'original_name' => $image->getClientOriginalName(),
+                'mime' => $image->getClientMimeType(),
+                'size' => $image->getSize(),
+                'sha256' => hash_file('sha256', $image->getRealPath()),
+            ]);
+        }
+
+        foreach (['warning_letter_file', 'lease_document_file'] as $type) {
+            if (! $request->hasFile($type)) {
+                continue;
+            }
+
+            $registryRequest->files()
+                ->where('type', $type)
+                ->get()
+                ->each(function (RequestFile $existingFile) {
+                    Storage::disk('public')->delete($existingFile->path);
+                    $existingFile->delete();
+                });
+
+            $file = $request->file($type);
+            $path = $file->store("requests/{$registryRequest->id}/files", 'public');
+            RequestFile::create([
+                'registry_request_id' => $registryRequest->id,
+                'uploaded_by' => $request->user()->id,
+                'type' => $type,
+                'path' => $path,
+                'original_name' => $file->getClientOriginalName(),
+                'mime' => $file->getClientMimeType(),
+                'size' => $file->getSize(),
+            ]);
+        }
+    }
+
+}
