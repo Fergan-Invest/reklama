@@ -343,7 +343,10 @@ function initSteps() {
     if (!steps.length || !panels.length) return;
 
     const storageKey = `requestFormStep:${location.pathname}:${index}`;
-    let current = Math.max(1, Number(appSessionStorage.getItem(storageKey) || 1));
+    const errorPanel = panels.find((panel) => panel.querySelector(".field-error"));
+    let current = errorPanel
+      ? Number(errorPanel.dataset.stepPanel)
+      : Math.max(1, Number(appSessionStorage.getItem(storageKey) || 1));
     const setStep = (step) => {
       current = Math.max(1, Math.min(step, panels.length));
       appSessionStorage.setItem(storageKey, String(current));
@@ -376,6 +379,26 @@ function initFormValidation() {
   if (!form) return;
 
   form.addEventListener("submit", (event) => {
+    const latitude = form.querySelector('[name="latitude"]');
+    const longitude = form.querySelector('[name="longitude"]');
+    if (latitude && longitude && (!latitude.value || !longitude.value)) {
+      event.preventDefault();
+      setFormSubmitting(form, false);
+      window.requestFormSetStep?.(4);
+
+      const status = document.getElementById("location-status");
+      if (status) {
+        status.textContent = "Reklama obyekti joylashgan nuqtani xaritada belgilang.";
+        status.classList.add("field-error");
+      }
+
+      window.setTimeout(() => {
+        document.getElementById("location-map")?.scrollIntoView({ behavior: "smooth", block: "center" });
+        showToast("Reklama obyekti joylashgan nuqtani xaritada belgilang.", "error");
+      }, 80);
+      return;
+    }
+
     const invalid = findFirstInvalidControl(form);
     if (!invalid) return;
 

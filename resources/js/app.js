@@ -40,6 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!element || typeof L === 'undefined') return;
     const latInput = document.getElementById('latitude');
     const lngInput = document.getElementById('longitude');
+    const locationStatus = document.getElementById('location-status');
     const initialLat = Number(element.dataset.lat) || 40.3777;
     const initialLng = Number(element.dataset.lng) || 71.7978;
     const hasLocation = Boolean(element.dataset.lat && element.dataset.lng);
@@ -47,7 +48,14 @@ document.addEventListener('DOMContentLoaded', () => {
     element._leafletMap = map;
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20, attribution: '&copy; OpenStreetMap' }).addTo(map);
     let marker = hasLocation ? L.marker([initialLat, initialLng], { draggable: true }).addTo(map) : null;
-    const save = ({ lat, lng }) => { latInput.value = lat.toFixed(7); lngInput.value = lng.toFixed(7); };
+    const save = ({ lat, lng }) => {
+        latInput.value = lat.toFixed(7);
+        lngInput.value = lng.toFixed(7);
+        if (locationStatus) {
+            locationStatus.textContent = 'Joylashuv belgilandi.';
+            locationStatus.classList.remove('field-error');
+        }
+    };
     const place = (latlng) => {
         if (!marker) {
             marker = L.marker(latlng, { draggable: true }).addTo(map);
@@ -63,7 +71,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     const locateButton = document.getElementById('locate-single-position');
-    const locationStatus = document.getElementById('location-status');
     locateButton?.addEventListener('click', () => {
         if (!navigator.geolocation) {
             if (locationStatus) locationStatus.textContent = 'Браузер геолокацияни қўллаб-қувватламайди.';

@@ -2,6 +2,7 @@
 /node_modules
 /.composer-cache
 /.tmp
+/disk-recovery-20260715/
 /public/build
 /public/hot
 /public/storage
